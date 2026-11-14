@@ -1,0 +1,51 @@
+# "Update now" for the shareable page. Only people with write access to this repo (the owner) can run it.
+# Pressing it does nothing in the cloud: the owner's Mac checks for new runs every 2 minutes, runs a Google scan
+# (inside the app's own 3-a-day limit) and refreshes the page, then writes status.json — this run waits for that.
+name: Update now
+run-name: "Update now (scan: ${{ inputs.scan }})"
+on:
+  workflow_dispatch:
+    inputs:
+      scan:
+        description: "Run a Google scan first (counts toward the 3 scans a day)"
+        type: boolean
+        default: true
+permissions:
+  contents: read
+concurrency:
+  group: update-now
+  cancel-in-progress: false
+jobs:
+  wait-for-mac:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Wait for the Mac to update the page
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "Asked your Mac to update the page. It checks every 2 minutes; a refresh takes about 40 minutes (plus ~8 for a scan)."
+          said=""
+          for i in $(seq 1 220); do
+            s=$(gh api "repos/$REPO/contents/status.json?ref=main" -H "Accept: application/vnd.github.raw" 2>/dev/null || echo '{}')
+            if echo "$s" | jq -e --argjson r "$RUN" '(.requests // []) | index($r) != null' >/dev/null 2>&1; then
+              state=$(echo "$s" | jq -r .state)
+              if [ "$state" = "working" ]; then
+                [ -z "$said" ] && echo "$(echo "$s" | jq -r '.note + " (" + .at + ")"')" && said=1
+              else
+                echo "$s" | jq -r '"Result: " + .state, "Scan: " + (.scan // "-"), "Snapshot taken: " + (.taken // "-"), (.note // "")'
+                if [ "$state" = "ok" ]; then
+                  echo "Open: https://01adityarathore-art.github.io/ottverse-trends-view/ (GitHub may take 1-2 min to show it)"
+                  exit 0
+                fi
+                exit 1
+              fi
+            elif [ "$i" -eq 6 ]; then
+              echo "No answer yet from your Mac. Is it on, awake and online?"
+            fi
+            sleep 30
+          done
+          echo "Your Mac did not finish in 110 minutes. If it was off or asleep, press Update now again once it is on."
+          exit 1
